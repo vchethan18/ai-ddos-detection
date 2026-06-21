@@ -7,15 +7,29 @@ import joblib
 import os
 
 # ── Paths ────────────────────────────────────────────────────────────
-CSV_PATH   = "data/network_data_v3.csv"
-MODEL_PATH = "models/random_forest.pkl"
+CSV_PATH   = "data/network_data_multiclass.csv"
+MODEL_PATH = "models/random_forest_multiclass.pkl"
+
+# ── Label names ──────────────────────────────────────────────────────
+LABEL_MAP = {
+    0: "Normal",
+    1: "SYN Flood",
+    2: "UDP Flood",
+    3: "ICMP Flood",
+    4: "Port Scan",
+    5: "TCP ACK Flood",
+    6: "TCP RST Flood",
+    7: "DNS Flood",
+    8: "ARP Flood"
+}
 
 # ── Features used for training ───────────────────────────────────────
 FEATURES = [
     "pps", "bytes",
-    "tcp", "udp", "tcp_ratio", "udp_ratio",
+    "tcp", "udp", "icmp",
+    "tcp_ratio", "udp_ratio",
     "unique_ips", "unique_ports",
-    "ack", "rst", "fin",
+    "syn", "ack", "rst", "fin",
     "top_port"
 ]
 TARGET = "label"
@@ -25,13 +39,20 @@ TARGET = "label"
 print("[1] Loading dataset...")
 df = pd.read_csv(CSV_PATH)
 
-print(f"    Total rows  : {len(df)}")
-print(f"    Normal  (0) : {(df[TARGET] == 0).sum()}")
-print(f"    Attack  (1) : {(df[TARGET] == 1).sum()}")
+print(f"    Total rows : {len(df)}")
+for label_num in sorted(df[TARGET].unique()):
+    name  = LABEL_MAP.get(label_num, f"Unknown({label_num})")
+    count = (df[TARGET] == label_num).sum()
+    print(f"    {name:<12} ({label_num}) : {count}")
 
 if df[TARGET].nunique() < 2:
-    print("\n[!] Dataset has only one class — collect attack traffic first.")
+    print("\n[!] Dataset has only one class — collect more traffic types first.")
     exit()
+
+missing = set(LABEL_MAP.keys()) - set(df[TARGET].unique())
+if missing:
+    missing_names = [LABEL_MAP[m] for m in missing]
+    print(f"\n[!] Warning: no data for {missing_names} — model won't be able to detect these.")
 
 
 # ── 2. Split ─────────────────────────────────────────────────────────
@@ -66,19 +87,22 @@ print("    Done.")
 print("\n[4] Evaluating...")
 y_pred = model.predict(X_test)
 
-accuracy = accuracy_score(y_test, y_pred)
-cm       = confusion_matrix(y_test, y_pred)
+accuracy       = accuracy_score(y_test, y_pred)
+labels_present = sorted(y.unique())
+names_present  = [LABEL_MAP.get(l, str(l)) for l in labels_present]
+cm             = confusion_matrix(y_test, y_pred, labels=labels_present)
 
 print(f"\n    Accuracy : {accuracy * 100:.2f}%")
 
-print("\n    Confusion Matrix:")
-print(f"                 Predicted")
-print(f"                 Normal  Attack")
-print(f"    Actual Normal  {cm[0][0]:<6}  {cm[0][1]}")
-print(f"    Actual Attack  {cm[1][0]:<6}  {cm[1][1]}")
+print("\n    Confusion Matrix (rows = actual, columns = predicted):")
+col_header = "    " + " " * 14 + "".join(f"{n:<12}" for n in names_present)
+print(col_header)
+for i, row_label in enumerate(names_present):
+    row_vals = "".join(f"{cm[i][j]:<12}" for j in range(len(names_present)))
+    print(f"    {row_label:<14}{row_vals}")
 
 print("\n    Classification Report:")
-print(classification_report(y_test, y_pred, target_names=["Normal", "Attack"]))
+print(classification_report(y_test, y_pred, labels=labels_present, target_names=names_present))
 
 
 # ── 5. Feature importance ─────────────────────────────────────────────
@@ -93,11 +117,11 @@ for feat, score in importances.items():
 # save plot
 plt.figure(figsize=(10, 6))
 importances.plot(kind="bar")
-plt.title("Feature Importance — Random Forest")
+plt.title("Feature Importance — Random Forest (Multi-Class)")
 plt.ylabel("Importance Score")
 plt.tight_layout()
-plt.savefig("models/feature_importance.png")
-print("\n    Plot saved → models/feature_importance.png")
+plt.savefig("models/feature_importance_multiclass.png")
+print("\n    Plot saved → models/feature_importance_multiclass.png")
 
 
 # ── 6. Save model ─────────────────────────────────────────────────────

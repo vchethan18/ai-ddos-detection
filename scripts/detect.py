@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 detect.py
-Real-time DDoS detection using the trained Random Forest model.
+Real-time DDoS detection using the trained Random Forest model (5-class).
 Captures live traffic in 1-second windows (same logic as feature_monitor.py),
-builds the feature vector, and predicts Normal/Attack for each window.
+builds the feature vector, and predicts the traffic type for each window.
 """
 
 import os
@@ -11,14 +11,27 @@ import time
 import joblib
 import pandas as pd
 from collections import Counter
-from scapy.all import sniff, IP, TCP, UDP
+from scapy.all import sniff, IP, TCP, UDP, ICMP
 
-MODEL_PATH = "models/random_forest.pkl"
-LOG_PATH   = "data/detection_log.csv"
+MODEL_PATH = "models/random_forest_multiclass.pkl"
+LOG_PATH   = "data/detection_log_multiclass.csv"
+
+# Label names — must match the labels used during training
+LABEL_MAP = {
+    0: "Normal",
+    1: "SYN Flood",
+    2: "UDP Flood",
+    3: "ICMP Flood",
+    4: "Port Scan",
+    5: "TCP ACK Flood",
+    6: "TCP RST Flood",
+    7: "DNS Flood",
+    8: "ARP Flood"
+}
 
 # Exact feature order the model was trained on
-FEATURE_COLS = ['pps', 'bytes', 'tcp', 'udp', 'tcp_ratio', 'udp_ratio',
-                'unique_ips', 'unique_ports', 'ack', 'rst', 'fin', 'top_port']
+FEATURE_COLS = ['pps', 'bytes', 'tcp', 'udp', 'icmp', 'tcp_ratio', 'udp_ratio',
+                'unique_ips', 'unique_ports', 'syn', 'ack', 'rst', 'fin', 'top_port']
 
 print(f"[*] Loading model from {MODEL_PATH} ...")
 model = joblib.load(MODEL_PATH)
@@ -29,6 +42,7 @@ packet_count = 0
 bytes_count  = 0
 tcp_count    = 0
 udp_count    = 0
+icmp_count   = 0
 syn_count    = 0
 ack_count    = 0
 rst_count    = 0
@@ -42,19 +56,28 @@ last_time = time.time()
 def init_log():
     if not os.path.exists(LOG_PATH) or os.path.getsize(LOG_PATH) == 0:
         with open(LOG_PATH, "w") as f:
-            f.write("timestamp,prediction,confidence,pps,unique_ports,rst,top_port\n")
+            f.write("timestamp,prediction,label_name,confidence,pps,unique_ports,rst,icmp,top_port\n")
 
-def log_detection(ts, pred, conf, pps, unique_ports, rst, top_port):
+def log_detection(ts, pred, label_name, conf, pps, unique_ports, rst, icmp, top_port):
     with open(LOG_PATH, "a") as f:
-        f.write(f"{ts},{pred},{conf:.4f},{pps},{unique_ports},{rst},{top_port}\n")
+        f.write(f"{ts},{pred},{label_name},{conf:.4f},{pps},{unique_ports},{rst},{icmp},{top_port}\n")
 
 init_log()
 
+# ── Sustained-attack tracking ────────────────────────────────────────
+# A single noisy second (misclassified or low-confidence) should not
+# trigger a full alert. We only confirm an attack after this many
+# consecutive high-confidence attack seconds in a row.
+SUSTAIN_THRESHOLD   = 3
+consecutive_streak  = 0
+streak_labels       = []
+
 def process(packet):
     global packet_count, bytes_count
-    global tcp_count, udp_count
+    global tcp_count, udp_count, icmp_count
     global syn_count, ack_count, rst_count, fin_count
     global last_time
+    global consecutive_streak, streak_labels
 
     packet_count += 1
     bytes_count  += len(packet)
@@ -72,6 +95,8 @@ def process(packet):
         udp_count += 1
         port_counter[packet[UDP].dport] += 1
         destination_ports.add(packet[UDP].dport)
+    elif ICMP in packet:
+        icmp_count += 1
 
     if IP in packet:
         source_ips.add(packet[IP].src)
@@ -92,10 +117,12 @@ def process(packet):
             "bytes"        : bytes_count,
             "tcp"          : tcp_count,
             "udp"          : udp_count,
+            "icmp"         : icmp_count,
             "tcp_ratio"    : tcp_ratio,
             "udp_ratio"    : udp_ratio,
             "unique_ips"   : len(source_ips),
             "unique_ports" : len(destination_ports),
+            "syn"          : syn_count,
             "ack"          : ack_count,
             "rst"          : rst_count,
             "fin"          : fin_count,
@@ -105,23 +132,52 @@ def process(packet):
         prediction = model.predict(features)[0]
         confidence = model.predict_proba(features)[0].max()
 
-        verdict = "ATTACK" if prediction == 1 else "Normal"
-        marker  = "  <<<< ALERT" if prediction == 1 else ""
+        verdict = LABEL_MAP.get(prediction, f"Unknown({prediction})")
+
+        # ── Confidence + sustained-attack alert level ───────────────
+        # Never hides an attack prediction — only changes how urgent
+        # the on-screen marker looks.
+        #   Normal                          -> no marker
+        #   Attack, confidence < threshold   -> Uncertain (streak resets)
+        #   Attack, confidence >= threshold,
+        #     but not enough in a row yet    -> Building (x/N)
+        #   Attack, confidence >= threshold,
+        #     N in a row reached             -> CONFIRMED ATTACK
+        CONFIDENCE_THRESHOLD = 0.75
+
+        if prediction == 0:
+            consecutive_streak = 0
+            streak_labels = []
+            marker = ""
+        elif confidence < CONFIDENCE_THRESHOLD:
+            consecutive_streak = 0
+            streak_labels = []
+            marker = "  <<<< Uncertain"
+        else:
+            consecutive_streak += 1
+            streak_labels.append(prediction)
+            if consecutive_streak >= SUSTAIN_THRESHOLD:
+                dominant_label = Counter(streak_labels).most_common(1)[0][0]
+                dominant_name  = LABEL_MAP.get(dominant_label, str(dominant_label))
+                marker = f"  <<<< CONFIRMED ATTACK ({dominant_name}, {consecutive_streak}s straight)"
+            else:
+                marker = f"  <<<< Building ({consecutive_streak}/{SUSTAIN_THRESHOLD})"
 
         print(
             f"PPS={packet_count:<5} UNIQUE_PORTS={len(destination_ports):<4} "
-            f"RST={rst_count:<4} TOP_PORT={top_port_num:<6} "
+            f"SYN={syn_count:<4} RST={rst_count:<4} ICMP={icmp_count:<4} TOP_PORT={top_port_num:<6} "
             f"-> {verdict} ({confidence*100:.1f}%){marker}"
         )
 
-        log_detection(round(current_time, 3), prediction, confidence,
-                      packet_count, len(destination_ports), rst_count, top_port_num)
+        log_detection(round(current_time, 3), prediction, verdict, confidence,
+                      packet_count, len(destination_ports), rst_count, icmp_count, top_port_num)
 
         # ── Reset counters for next window ────────────────────────────
         packet_count = 0
         bytes_count  = 0
         tcp_count    = 0
         udp_count    = 0
+        icmp_count   = 0
         syn_count    = 0
         ack_count    = 0
         rst_count    = 0
@@ -132,6 +188,6 @@ def process(packet):
         last_time = current_time
 
 try:
-    sniff(prn=process, store=False, iface="lo")
+    sniff(prn=process, store=False, iface="eth0")
 except KeyboardInterrupt:
     print("\n[*] Stopped.")

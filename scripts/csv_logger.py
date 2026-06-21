@@ -1,7 +1,7 @@
 import csv
 import os
 
-CSV_PATH = "data/network_data.csv"
+CSV_PATH = "data/network_data_multiclass.csv"
 
 HEADERS = [
     "timestamp",
@@ -9,6 +9,7 @@ HEADERS = [
     "bytes",
     "tcp",
     "udp",
+    "icmp",
     "tcp_ratio",
     "udp_ratio",
     "unique_ips",
@@ -18,7 +19,8 @@ HEADERS = [
     "rst",
     "fin",
     "top_port",
-    "label"          # 0 = normal  |  1 = attack
+    "label"          # 0=Normal 1=SYN Flood 2=UDP Flood 3=ICMP Flood 4=Port Scan
+                     # 5=TCP ACK Flood 6=TCP RST Flood 7=DNS Flood 8=ARP Flood
 ]
 
 
