@@ -125,8 +125,8 @@ ai-ddos-detection/
 
 | VM | Role | IP (example) |
 |---|---|---|
-| VM 1 — Original Kali | Victim (runs all Python scripts) | 192.168.0.7 |
-| VM 2 — Cloned Kali | Attacker (runs hping3 only) | 192.168.0.x |
+| VM 1 — Original Kali | Victim (runs all Python scripts) | 192.168.x.x |
+| VM 2 — Cloned Kali | Attacker (runs hping3 only) | 192.168.x.x |
 
 ### Clone the attacker VM in VirtualBox
 
@@ -146,7 +146,7 @@ For each VM in VirtualBox: **Settings → Network → Adapter 1 → Attached to:
 
 Boot both VMs. On the attacker VM:
 ```bash
-ping 192.168.0.7
+ping 192.168.0.x
 ```
 You should see replies with 0% packet loss before going any further.
 
@@ -300,42 +300,42 @@ Stop at any time with `Ctrl+C`.
 
 ## 10. Step 5 — Execute Attacks from the Attacker VM
 
-Run these on the **attacker VM** while `feature_monitor.py` or `detect.py` or `dashboard.py` is running on the victim. Replace `192.168.0.7` with your actual victim IP.
+Run these on the **attacker VM** while `feature_monitor.py` or `detect.py` or `dashboard.py` is running on the victim. Replace `192.168.x.x` with your actual victim IP.
 
 ### SYN Flood
 ```bash
-sudo hping3 -S 192.168.0.7 -p 80 --flood
+sudo hping3 -S 192.168.x.x -p 80 --flood
 ```
 
 ### UDP Flood
 ```bash
-sudo hping3 --udp 192.168.0.7 -p 80 --flood
+sudo hping3 --udp 192.168.x.x -p 80 --flood
 ```
 
 ### ICMP Flood
 ```bash
-sudo hping3 --icmp 192.168.0.7 --flood
+sudo hping3 --icmp 192.168.x.x --flood
 ```
 
 ### Port Scan
 ```bash
-sudo hping3 --scan 1-65535 -S 192.168.0.7
+sudo hping3 --scan 1-65535 -S 192.168.x.x
 ```
 *(Finishes on its own — no need to Ctrl+C. Run 2–3 times to build up enough rows.)*
 
 ### TCP ACK Flood
 ```bash
-sudo hping3 -A 192.168.0.7 -p 80 --flood
+sudo hping3 -A 192.168.x.x -p 80 --flood
 ```
 
 ### TCP RST Flood
 ```bash
-sudo hping3 -R 192.168.0.7 -p 80 --flood
+sudo hping3 -R 192.168.x.x -p 80 --flood
 ```
 
 ### DNS Flood
 ```bash
-sudo hping3 --udp 192.168.0.7 -p 53 --flood
+sudo hping3 --udp 192.168.x.x -p 53 --flood
 ```
 
 ### ARP Flood
@@ -344,7 +344,7 @@ ARP is not an IP-based protocol — `hping3` cannot generate it. Use Scapy inste
 ```bash
 sudo /home/kali/ai-ddos-detection/venv/bin/python3 -c "
 from scapy.all import ARP, Ether, sendp
-pkt = Ether(dst='ff:ff:ff:ff:ff:ff')/ARP(pdst='192.168.0.7')
+pkt = Ether(dst='ff:ff:ff:ff:ff:ff')/ARP(pdst='192.168.x.x')
 sendp(pkt, iface='eth0', loop=1, inter=0.0001, verbose=False)
 "
 ```
@@ -363,7 +363,7 @@ sudo /home/kali/ai-ddos-detection/venv/bin/python3 scripts/dashboard.py
 Then open in any browser (from the victim VM itself, or from another machine on the same network):
 
 ```
-http://192.168.0.7:5000
+http://192.168.x.x:5000
 ```
 
 ---
